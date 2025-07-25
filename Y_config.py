@@ -11,6 +11,7 @@ def load_env():
         "UPSTOX_API_KEY": os.getenv("UPSTOX_API_KEY"),
         "UPSTOX_API_SECRET": os.getenv("UPSTOX_API_SECRET"),
         "INSTRUMENT_KEY": os.getenv("INSTRUMENT_KEY"),
+        "ASSET_SYMBOL": os.getenv("ASSET_SYMBOL"),
         "UNIT": os.getenv("UNIT"),
         "INTERVAL": os.getenv("INTERVAL"),
         "QUANTITY": int(os.getenv("QUANTITY")),

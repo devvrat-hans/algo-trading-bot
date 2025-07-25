@@ -1,6 +1,6 @@
 upstox-python-sdk
 numpy
 pandas
-dotenv
+python-dotenv
 requests
 
