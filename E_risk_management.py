@@ -1,3 +1,6 @@
+import sys
+sys.dont_write_bytecode = True
+
 from Y_config import load_env
 
 def check_risk(trade_history, current_pnl, current_position_pnl=0):

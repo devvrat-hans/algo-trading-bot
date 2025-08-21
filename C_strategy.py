@@ -1,3 +1,6 @@
+import sys
+sys.dont_write_bytecode = True
+
 from strategies.strategy_01 import generate_signal
 from Y_config import load_env
 

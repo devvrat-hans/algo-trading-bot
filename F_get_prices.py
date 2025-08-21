@@ -1,3 +1,6 @@
+import sys
+sys.dont_write_bytecode = True
+
 import upstox_client
 from upstox_client.rest import ApiException
 from Y_config import load_env

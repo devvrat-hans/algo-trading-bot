@@ -1,3 +1,6 @@
+import sys
+sys.dont_write_bytecode = True
+
 import upstox_client
 from upstox_client.rest import ApiException
 from Y_config import load_env
@@ -26,7 +29,7 @@ def execute_buy_order(access_token, instrument_key, quantity):
         api_response = api_instance.place_order(body)
         return api_response
     except ApiException as e:
-        print(f"Exception when calling OrderApiV3->place_order: {e}")
+        print("Exception when calling OrderApiV3->place_order: %s\n" % e)
         return None
 
 def execute_sell_order(access_token, instrument_key, quantity):
@@ -69,11 +72,13 @@ if __name__ == "__main__":
     if buy_order_stats:
         print(f"Buy Order ID: {buy_order_stats.data.order_ids}, Status: {buy_order_stats.status}, "
               f"Latency: {buy_order_stats.metadata.latency}")
+        print("Order executed successfully.")
     else:
         print("Failed to execute buy order.")
     if sell_order_stats:
         print(f"Sell Order ID: {sell_order_stats.data.order_ids}, Status: {sell_order_stats.status}, "
               f"Latency: {sell_order_stats.metadata.latency}")
+        print("Order executed successfully.")
     else:
         print("Failed to execute sell order.")
-    print("Orders executed successfully.")
+    

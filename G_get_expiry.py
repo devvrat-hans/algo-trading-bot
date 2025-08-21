@@ -1,24 +1,20 @@
+import sys
+sys.dont_write_bytecode = True
+
 from datetime import datetime, timedelta
 
-def get_expiry_weekly_next_week():
+def get_expiry_weekly_current_week():
     """
-    Returns the expiry date for the next week.
-    The expiry is set to the last Thursday of the next week.
+    Returns the expiry date for the current week.
+    The expiry is the upcoming Thursday. If today is Thursday, it's today.
+    If today is past Thursday, it's next week's Thursday.
     """
     today = datetime.now()
-
-    days_until_thursday = (3 - today.weekday()) % 7 + 7
-
-    if days_until_thursday == 0:
-        return today.date() + timedelta(weeks=1)
-
-
-    next_thursday = today + timedelta(days=days_until_thursday)
-    return next_thursday.date()
+    days_until_thursday = (3 - today.weekday() + 7) % 7
+    expiry_date = today + timedelta(days=days_until_thursday)
+    return expiry_date.date()
 
 
 if __name__ == "__main__":
-    expiry_date = get_expiry_weekly_next_week()
-    print(f"The expiry date for the next week is: {expiry_date}")
-
-
+    expiry_date = get_expiry_weekly_current_week()
+    print(f"The current weekly expiry date is: {expiry_date}")

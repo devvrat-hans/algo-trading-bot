@@ -7,40 +7,60 @@ from C_strategy import process_market_data
 from D_order_execution import execute_buy_order, execute_sell_order
 from E_risk_management import check_risk
 from F_get_prices import get_live_price
+from H_get_instrument_key import get_trading_instrument
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from A_account_connect import account_connect
 
-def get_current_expiry():
-    """Get current weekly expiry date in required format"""
-    today = datetime.now()
-    days_until_thursday = (3 - today.weekday()) % 7
-    expiry_date = today + timedelta(days=days_until_thursday)
-    return expiry_date.strftime("%d%b").upper()
-
-def get_atm_option_instrument(underlying_price, expiry_date, option_type):
+def get_atm_option_instrument(underlying_price, option_type):
     """
     Get ATM option instrument key based on underlying price.
     
     Args:
         underlying_price (float): Current price of underlying
-        expiry_date (str): Option expiry date
         option_type (str): 'CE' for Call or 'PE' for Put
         
     Returns:
-        str: ATM option instrument key
+        str: ATM option instrument key or None if not found
     """
+    instruments_df = get_trading_instrument()
+    
+    if instruments_df.empty:
+        return None
+    
+    # Filter for specific option type
+    options_df = instruments_df[instruments_df['instrument_type'] == option_type]
+    
+    if options_df.empty:
+        return None
+    
+    # Find ATM strike (rounding to nearest 50 for Bank Nifty)
     atm_strike = round(underlying_price / 50) * 50
-    instrument_key = f"NSE_FO|{atm_strike}{option_type}{expiry_date}"
-    return instrument_key
+    
+    # Filter for ATM strike
+    atm_options = options_df[options_df['strike'] == atm_strike]
+    
+    if not atm_options.empty:
+        return atm_options.iloc[0]['instrument_key']
+    
+    # If exact ATM not found, find nearest strike as a fallback
+    options_df['strike_diff'] = abs(options_df['strike'] - atm_strike)
+    nearest_option = options_df.loc[options_df['strike_diff'].idxmin()]
+    
+    return nearest_option['instrument_key']
 
 def close_position(access_token, position_instrument, position_entry_price, current_position, trade_history, current_pnl, quantity):
     """Helper function to close a position and update trade history"""
     print(f"\n{'='*80}\n📊 CLOSING POSITION: {current_position} at {datetime.now().strftime('%H:%M:%S')}\n{'='*80}")
+    # To close a long position (CE or PE), we need to sell it.
     sell_result = execute_sell_order(access_token, position_instrument, quantity)
     
     if sell_result:
         exit_price = get_live_price(access_token, position_instrument)
+        if exit_price is None:
+            print("❌ Could not fetch exit price. P&L cannot be calculated.")
+            exit_price = position_entry_price # Assume no change for record keeping
+        
         trade_pnl = (exit_price - position_entry_price) * quantity
         current_pnl += trade_pnl
         
@@ -76,7 +96,7 @@ def print_trading_summary(trade_history, current_pnl, runtime):
     
     if trade_history:
         profitable_trades = len([t for t in trade_history if t['pnl'] > 0])
-        losing_trades = len([t for t in trade_history if t['pnl'] < 0])
+        losing_trades = len([t for t in trade_history if t['pnl'] <= 0])
         win_rate = (profitable_trades / len(trade_history) * 100)
         print(f"  ✅ Profitable trades: {profitable_trades}")
         print(f"  ❌ Losing trades: {losing_trades}")
@@ -95,13 +115,11 @@ def manage_trades():
     Returns:
         dict: Summary of trading activity for the session
     """
-    # Load config and connect to account only ONCE
     config = load_env()
     account_details = account_connect()
     access_token = account_details.get('access_token')
     
-    # Get trading parameters from config
-    instrument_key = config.get('INSTRUMENT_KEY')
+    instrument_key = config.get('INSTRUMENT_KEY') # This is the underlying index
     unit = config.get('UNIT')
     interval = config.get('INTERVAL')
     quantity = config.get('QUANTITY')
@@ -113,18 +131,18 @@ def manage_trades():
     start_time = time.time()
     last_signal = None
     iteration = 0
-    current_position = None
+    current_position = None # Will be 'CE' or 'PE'
     position_entry_price = 0.0
-    position_instrument = None
+    position_instrument = None # The actual option instrument key
     
     print(f"\n{'='*80}")
     print(f"🚀 TRADING SESSION STARTED - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*80}")
-    print(f"  📈 Trading instrument: {instrument_key}")
-    print(f"  📊 Chart interval: {interval} {unit}")
-    print(f"  🔢 Quantity: {quantity}")
-    print(f"  ⏱️  Check interval: {trade_check_interval}s")
-    print(f"  ⏰ Maximum runtime: {max_runtime/3600:.2f} hours")
+    print(f"  📈 Underlying Instrument: {instrument_key}")
+    print(f"  📊 Chart Interval: {interval} {unit}")
+    print(f"  🔢 Quantity per trade: {quantity}")
+    print(f"  ⏱️  Check Interval: {trade_check_interval}s")
+    print(f"  ⏰ Maximum Runtime: {max_runtime/3600:.2f} hours")
     print(f"{'='*80}\n")
     
     while time.time() - start_time < max_runtime:
@@ -135,19 +153,21 @@ def manage_trades():
         print(f"ITERATION {iteration} - {datetime.now().strftime('%H:%M:%S')} (Runtime: {elapsed_minutes:.2f} min)")
         print(f"{'*'*80}")
         
-        # Print trading summary every 10 iterations
-        if iteration % 10 == 0:
+        if iteration > 1 and iteration % 10 == 0:
             print_trading_summary(trade_history, current_pnl, elapsed_minutes)
         
         current_position_pnl = 0
         if current_position:
             current_price = get_live_price(access_token, position_instrument)
-            current_position_pnl = (current_price - position_entry_price) * quantity
-            print(f"📍 Current position: {current_position}")
-            print(f"  Instrument: {position_instrument}")
-            print(f"  Entry price: {position_entry_price:.2f}")
-            print(f"  Current price: {current_price:.2f}")
-            print(f"  Unrealized P&L: {'📈' if current_position_pnl > 0 else '📉'} {current_position_pnl:.2f}")
+            if current_price is not None and position_entry_price > 0:
+                current_position_pnl = (current_price - position_entry_price) * quantity
+                print(f"📍 Current position: {current_position}")
+                print(f"  Instrument: {position_instrument}")
+                print(f"  Entry price: {position_entry_price:.2f}")
+                print(f"  Current price: {current_price:.2f}")
+                print(f"  Unrealized P&L: {'📈' if current_position_pnl > 0 else '📉'} {current_position_pnl:.2f}")
+            else:
+                print(f"📍 Current position: {current_position} (Could not fetch live price)")
         else:
             print("📍 No active position")
         
@@ -155,29 +175,22 @@ def manage_trades():
         if not risk_result['continue_trading']:
             print(f"\n⚠️ RISK LIMIT REACHED: {risk_result['reason']} ⚠️")
             
-            # Immediately close position if stop loss or take profit hit
-            if risk_result['reason'] in ['STOP_LOSS', 'TAKE_PROFIT'] and current_position:
-                print(f"⏰ {risk_result['reason']} triggered. Closing position immediately.")
+            if current_position:
+                print(f"⏰ Closing position due to risk limit.")
                 current_position, position_instrument, position_entry_price, current_pnl = close_position(
                     access_token, position_instrument, position_entry_price, current_position, 
                     trade_history, current_pnl, quantity
                 )
             
-            # If max trades or max loss hit, stop trading completely
             if risk_result['reason'] in ['MAX_TRADES_PER_DAY', 'MAX_DAILY_LOSS']:
-                print(f"⛔ {risk_result['reason']} limit hit. Stopping trading.")
-                if current_position:
-                    current_position, position_instrument, position_entry_price, current_pnl = close_position(
-                        access_token, position_instrument, position_entry_price, current_position, 
-                        trade_history, current_pnl, quantity
-                    )
+                print(f"⛔ {risk_result['reason']} limit hit. Stopping trading for the day.")
                 break
         
-        print("\n📊 Fetching market data...")
+        print("\n📊 Fetching market data for underlying...")
         req_market_data = market_data(access_token, instrument_key, unit, interval)
         
         if req_market_data is None or req_market_data.empty:
-            print("❌ No market data available")
+            print("❌ No market data available for underlying. Waiting...")
             time.sleep(trade_check_interval)
             continue
         
@@ -185,49 +198,51 @@ def manage_trades():
         signal = process_market_data(req_market_data)
         print(f"🔍 Signal generated: {signal}")
         
-        underlying_price = get_live_price(access_token, instrument_key)
-        print(f"💹 Underlying price: {underlying_price:.2f}")
-        
-        current_time = datetime.now()
-        expiry_date = get_current_expiry()
-        
+        # We only act on new, non-hold signals
         if signal != 'hold' and signal != last_signal:
-            print(f"\n🔄 New signal detected: {signal}")
+            print(f"\n🔄 New signal detected: {signal.upper()}")
             
             if current_position is not None:
-                print("🔄 Closing current position before taking new position")
+                print("🔄 Closing current position before taking new position...")
                 current_position, position_instrument, position_entry_price, current_pnl = close_position(
                     access_token, position_instrument, position_entry_price, current_position, 
                     trade_history, current_pnl, quantity
                 )
             
-            if signal == 'buy':
-                print("\n🔷 Processing BUY signal")
-                atm_ce_instrument = get_atm_option_instrument(underlying_price, expiry_date, 'CE')
-                print(f"  Selected ATM CE: {atm_ce_instrument}")
-                buy_result = execute_buy_order(access_token, atm_ce_instrument, quantity)
-                
-                if buy_result:
-                    current_position = 'CE'
-                    position_instrument = atm_ce_instrument
-                    position_entry_price = get_live_price(access_token, atm_ce_instrument)
-                    print(f"✅ Bought ATM CE: {atm_ce_instrument} at {position_entry_price:.2f}")
-                else:
-                    print("❌ Failed to execute buy order")
+            print("🔷 Processing new position...")
+            underlying_price = get_live_price(access_token, instrument_key)
+            if underlying_price is None:
+                print("❌ Could not fetch underlying price. Cannot determine ATM strike. Skipping trade.")
+                time.sleep(trade_check_interval)
+                continue
             
-            elif signal == 'sell':
-                print("\n🔶 Processing SELL signal")
-                atm_pe_instrument = get_atm_option_instrument(underlying_price, expiry_date, 'PE')
-                print(f"  Selected ATM PE: {atm_pe_instrument}")
-                buy_result = execute_buy_order(access_token, atm_pe_instrument, quantity)
+            print(f"💹 Underlying price: {underlying_price:.2f}")
+            
+            option_type_to_buy = 'CE' if signal == 'buy' else 'PE'
+            print(f"🔎 Searching for ATM {option_type_to_buy} option...")
+            
+            option_instrument_to_trade = get_atm_option_instrument(underlying_price, option_type_to_buy)
+            
+            if option_instrument_to_trade:
+                print(f"  Selected ATM {option_type_to_buy}: {option_instrument_to_trade}")
+                # We always BUY the option (either CE or PE)
+                buy_result = execute_buy_order(access_token, option_instrument_to_trade, quantity)
                 
                 if buy_result:
-                    current_position = 'PE'
-                    position_instrument = atm_pe_instrument
-                    position_entry_price = get_live_price(access_token, atm_pe_instrument)
-                    print(f"✅ Bought ATM PE: {atm_pe_instrument} at {position_entry_price:.2f}")
+                    print(f"✅ BUY order placed for {option_instrument_to_trade}")
+                    current_position = option_type_to_buy
+                    position_instrument = option_instrument_to_trade
+                    # Get entry price after placing order
+                    position_entry_price = get_live_price(access_token, position_instrument)
+                    if position_entry_price is not None:
+                         print(f"  Entry price: {position_entry_price:.2f}")
+                    else:
+                        print("  Could not confirm entry price.")
+                        position_entry_price = 0 # Set to 0 if fetch fails
                 else:
-                    print("❌ Failed to execute buy order")
+                    print(f"❌ Failed to execute buy order for {option_instrument_to_trade}")
+            else:
+                print(f"❌ Could not find suitable {option_type_to_buy} option to trade.")
         
         last_signal = signal
         
@@ -238,14 +253,14 @@ def manage_trades():
         time.sleep(trade_check_interval)
     
     if current_position is not None:
-        print("\n⏰ Maximum runtime reached. Closing final position before session end.")
+        print("\n⏰ Session ending. Closing final position.")
         current_position, position_instrument, position_entry_price, current_pnl = close_position(
             access_token, position_instrument, position_entry_price, current_position, 
             trade_history, current_pnl, quantity
         )
     
     profitable_trades = len([t for t in trade_history if t['pnl'] > 0])
-    losing_trades = len([t for t in trade_history if t['pnl'] < 0])
+    losing_trades = len([t for t in trade_history if t['pnl'] <= 0])
     win_rate = (profitable_trades / len(trade_history) * 100) if trade_history else 0
     
     summary = {
